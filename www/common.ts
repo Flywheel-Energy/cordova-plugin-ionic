@@ -70,6 +70,7 @@ class IonicDeployImpl {
   private _fileManager: FileManager = new FileManager();
   private SNAPSHOT_CACHE = 'ionic_built_snapshots';
   private MANIFEST_FILE = 'pro-manifest.json';
+  private NEW_MANIFEST_FILE = 'new-pro-manifest.json';
   public PLUGIN_VERSION = '5.5.2';
 
   constructor(appInfo: IAppInfo, preferences: ISavedPreferences) {
@@ -284,6 +285,10 @@ class IonicDeployImpl {
       method: 'GET',
       redirect: 'follow',
     });
+    const newManifestPath = new URL(Path.join(this.appInfo.dataDirectory, this.NEW_MANIFEST_FILE)).pathname;
+    console.log('Downloading new manifest to path: ', newManifestPath);
+    await this._fileManager.downloadAndWriteFile(url, newManifestPath);
+    console.log('Successfully Downloaded new manifest to path: ', newManifestPath);
     return {
       fileBaseUrl: resp.url,
       manifestJson: await resp.json()
@@ -292,7 +297,18 @@ class IonicDeployImpl {
 
   private async _diffManifests(newManifest: ManifestFileEntry[]) {
     try {
-      const manifestResp = await fetch(`${WEBVIEW_SERVER_URL}/${this.MANIFEST_FILE}`);
+      let manifestResp = await fetch(`${WEBVIEW_SERVER_URL}/${this.MANIFEST_FILE}`);
+      try {
+        const manifestPath = new URL(Path.join(this.appInfo.dataDirectory, this.MANIFEST_FILE)).pathname;
+        console.log('trying to get already saved manifest in path: ', manifestPath);
+        manifestResp = await fetch(manifestPath, {
+          method: 'GET',
+          redirect: 'follow',
+        });
+        console.log('Got already saved manifest: ', manifestResp.json());
+      } catch (e) {
+        // do nothing as we already have the manifest response
+      }
       const bundledManifest: ManifestFileEntry[] = await manifestResp.json();
       const bundleManifestStrings = bundledManifest.map(entry => JSON.stringify(entry));
       return newManifest.filter(entry => bundleManifestStrings.indexOf(JSON.stringify(entry)) === -1);
@@ -322,6 +338,11 @@ class IonicDeployImpl {
     prefs.availableUpdate.state = UpdateState.Ready;
     prefs.updates[prefs.availableUpdate.versionId] = prefs.availableUpdate;
     await this._savePrefs(prefs);
+    const newManifestPath = new URL(Path.join(this.appInfo.dataDirectory, this.NEW_MANIFEST_FILE)).pathname;
+    const currentManifestPath = new URL(Path.join(this.appInfo.dataDirectory, this.MANIFEST_FILE)).pathname;
+    console.log('trying to save the new manifest file to the current for future use.');
+    await this._fileManager.downloadAndWriteFile(newManifestPath, currentManifestPath);
+    console.log('Saved new manifest to the current.');
     return true;
   }
 
