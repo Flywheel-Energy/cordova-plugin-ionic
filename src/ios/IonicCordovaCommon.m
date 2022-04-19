@@ -65,6 +65,27 @@
     [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK] callbackId:command.callbackId];
 }
 
+- (void) copyDirectory:(CDVInvokedUrlCommand*)command {
+    NSDictionary *options = command.arguments[0];
+    NSLog(@"Got copyTo: %@", options);
+    NSString *source = options[@"source"];
+    NSString *dest = options[@"target"];
+
+    NSError *createDirError = nil;
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:dest withIntermediateDirectories:YES attributes:nil error:&createDirError]) {
+        [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: [createDirError localizedDescription]]  callbackId:command.callbackId];
+        return;
+    }
+    [[NSFileManager defaultManager] removeItemAtPath:dest error:nil];
+    NSError *copyError = nil;
+    if (![[NSFileManager defaultManager] copyItemAtPath:source toPath:dest error:&copyError]) {
+        NSLog(@"Error copying files: %@", [copyError localizedDescription]);
+        [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: [copyError localizedDescription]]  callbackId:command.callbackId];
+        return;
+    }
+    [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK] callbackId:command.callbackId];
+}
+
 - (void) downloadFile:(CDVInvokedUrlCommand*)command {
     NSDictionary *options = command.arguments[0];
     NSString *target = options[@"target"];
