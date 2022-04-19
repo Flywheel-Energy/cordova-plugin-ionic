@@ -70,7 +70,6 @@ class IonicDeployImpl {
   private _fileManager: FileManager = new FileManager();
   private SNAPSHOT_CACHE = 'ionic_built_snapshots';
   private MANIFEST_FILE = 'pro-manifest.json';
-  private NEW_MANIFEST_FILE = 'new-pro-manifest.json';
   public PLUGIN_VERSION = '5.5.2';
 
   constructor(appInfo: IAppInfo, preferences: ISavedPreferences) {
@@ -224,8 +223,22 @@ class IonicDeployImpl {
     const prefs = this._savedPreferences;
     if (prefs.availableUpdate && prefs.availableUpdate.state === UpdateState.Available) {
       const { fileBaseUrl, manifestJson } = await this._fetchManifest(prefs.availableUpdate.url, prefs.availableUpdate.versionId);
-      const diffedManifest = await this._diffManifests(manifestJson, prefs.currentVersionId);
-      await this.prepareUpdateDirectory(prefs.availableUpdate.versionId);
+      let currentManifestJson;
+      if (prefs.currentVersionId) {
+        try {
+          const newUrl = prefs.availableUpdate.url.replace(prefs.availableUpdate.versionId, prefs.currentVersionId);
+          console.log('trying to get current manifest file at url: ', newUrl);
+          if (newUrl !== prefs.availableUpdate.url) {
+            const currentManifestObject = await this._fetchManifest(newUrl, prefs.currentVersionId);
+            currentManifestJson = currentManifestObject.manifestJson;
+          }
+        } catch (e) {
+          // doesn't matter if it fails will do a full download instead
+          console.log('Was not able to download the current manifest file.', e);
+        }
+      }
+      const diffedManifest = await this._diffManifests(manifestJson, currentManifestJson);
+      await this.prepareUpdateDirectory(prefs.availableUpdate.versionId, prefs.currentVersionId);
       await this._downloadFilesFromManifest(fileBaseUrl, diffedManifest,  prefs.availableUpdate.versionId, progress);
       prefs.availableUpdate.state = UpdateState.Pending;
       await this._savePrefs(prefs);
@@ -285,33 +298,17 @@ class IonicDeployImpl {
       method: 'GET',
       redirect: 'follow',
     });
-    const newManifestPath = new URL(Path.join(this.appInfo.dataDirectory, versionId, this.MANIFEST_FILE)).pathname;
-    console.log('Downloading new manifest to path: ', newManifestPath);
-    await this._fileManager.downloadAndWriteFile(url, newManifestPath);
-    console.log('Successfully Downloaded new manifest to path: ', newManifestPath);
     return {
       fileBaseUrl: resp.url,
       manifestJson: await resp.json()
     };
   }
 
-  private async _diffManifests(newManifest: ManifestFileEntry[], previousVersionId: string | undefined) {
+  private async _diffManifests(newManifest: ManifestFileEntry[], oldManifest: ManifestFileEntry[] | undefined) {
     try {
-      let manifestResp = await fetch(`${WEBVIEW_SERVER_URL}/${this.MANIFEST_FILE}`);
-      try {
-        if (previousVersionId) {
-          const manifestPath = new URL(Path.join(this.appInfo.dataDirectory, previousVersionId, this.MANIFEST_FILE)).pathname;
-          console.log('trying to get already saved manifest in path: ', manifestPath);
-          manifestResp = await fetch(manifestPath, {
-            method: 'GET',
-            redirect: 'follow',
-          });
-          console.log('Got already saved manifest: ', manifestResp.json());
-        }
-      } catch (e) {
-        // do nothing as we already have the manifest response
-      }
-      const bundledManifest: ManifestFileEntry[] = await manifestResp.json();
+      const manifestResp = await fetch(`${WEBVIEW_SERVER_URL}/${this.MANIFEST_FILE}`);
+      let bundledManifest: ManifestFileEntry[] = await manifestResp.json();
+      if (oldManifest) bundledManifest = oldManifest;
       const bundleManifestStrings = bundledManifest.map(entry => JSON.stringify(entry));
       return newManifest.filter(entry => bundleManifestStrings.indexOf(JSON.stringify(entry)) === -1);
     } catch (e) {
@@ -319,12 +316,18 @@ class IonicDeployImpl {
     }
   }
 
-  private async prepareUpdateDirectory(versionId: string) {
+  private async prepareUpdateDirectory(versionId: string, currentVersionId: string | undefined) {
     await this._cleanSnapshotDir(versionId);
     console.log('Cleaned version directory');
 
-    await this._copyBaseAppDir(versionId);
-    console.log('Copied base app resources');
+    if (currentVersionId) {
+      await this._copyCurrentAppDir(currentVersionId, versionId);
+      console.log('Copied current app resources');
+    }
+    else {
+      await this._copyBaseAppDir(versionId);
+      console.log('Copied base app resources');
+    }
   }
 
   async extractUpdate(progress?: CallbackFunction<number>): Promise<boolean> {
@@ -441,12 +444,6 @@ class IonicDeployImpl {
     const snapshotDir = this.getSnapshotCacheDir(versionId);
     try {
       await this._fileManager.remove(snapshotDir);
-      try {
-        const manifestPath = Path.join(this.appInfo.dataDirectory, versionId, this.MANIFEST_FILE);
-        await this._fileManager.remove(manifestPath);
-      } catch (e) {
-        // do nothing as the file probably doesn't exist
-      }
       timer.end();
     } catch (e) {
       console.log('No directory found for snapshot no need to delete');
@@ -461,6 +458,15 @@ class IonicDeployImpl {
         path: this.getBundledAppDir(),
         directory: 'APPLICATION',
       },
+      target: this.getSnapshotCacheDir(versionId),
+    });
+    timer.end();
+  }
+
+  private async _copyCurrentAppDir(currentVersionId: string, versionId: string) {
+    const timer = new Timer('CopyCurrentApp');
+    await this._fileManager.copyDirectory({
+      source: new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE,  currentVersionId)).pathname,
       target: this.getSnapshotCacheDir(versionId),
     });
     timer.end();
@@ -597,6 +603,12 @@ class FileManager {
     return new Promise<void>( (resolve, reject) => {
       cordova.exec(resolve, reject, 'IonicCordovaCommon', 'downloadFile', [{url, target: path}]);
     });
+  }
+
+  async copyDirectory(options: {source: string, target: string}) {
+    return new Promise<void>((resolve, reject) => {
+      cordova.exec(resolve, reject, 'IonicCordovaCommon', 'copyDirectory', [options]);
+    })
   }
 }
 
