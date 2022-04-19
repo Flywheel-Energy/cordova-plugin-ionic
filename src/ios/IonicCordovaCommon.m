@@ -67,7 +67,7 @@
 
 - (void) copyDirectory:(CDVInvokedUrlCommand*)command {
     NSDictionary *options = command.arguments[0];
-    NSLog(@"Got copyTo: %@", options);
+    NSLog(@"Got copyDirectory: %@", options);
     NSString *source = options[@"source"];
     NSString *dest = options[@"target"];
 
