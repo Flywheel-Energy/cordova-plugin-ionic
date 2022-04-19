@@ -228,6 +228,43 @@ public class IonicCordovaCommon extends CordovaPlugin {
   }
 
   /**
+   * copy a directory to another directory
+   *
+   */
+  public void copyDirectory(CallbackContext callbackContext, JSONObject options) throws JSONException {
+    Log.d(TAG, "copyDirectory called with " + options.toString());
+    PluginResult result;
+
+    try {
+      String source = options.getString("source");
+      String target = options.getString("target");
+      File srcFile = new File(source);
+
+      if (!srcFile.exists()) {
+        result = new PluginResult(PluginResult.Status.ERROR, "source file or directory does not exist");
+        result.setKeepCallback(false);
+        callbackContext.sendPluginResult(result);
+        return;
+      }
+
+      if (srcFile.isDirectory()) {
+        FileUtils.copyDirectory(srcFile, new File(target));
+      } else {
+        FileUtils.copyFile(srcFile, new File(target));
+      }
+    } catch (Exception e) {
+      result = new PluginResult(PluginResult.Status.ERROR, e.getMessage());
+      result.setKeepCallback(false);
+      callbackContext.sendPluginResult(result);
+      return;
+    }
+
+    result = new PluginResult(PluginResult.Status.OK);
+    result.setKeepCallback(false);
+    callbackContext.sendPluginResult(result);
+  }
+
+  /**
    * recursively remove a directory or a file
    *
    */
