@@ -223,8 +223,8 @@ class IonicDeployImpl {
   async downloadUpdate(progress?: CallbackFunction<number>): Promise<boolean> {
     const prefs = this._savedPreferences;
     if (prefs.availableUpdate && prefs.availableUpdate.state === UpdateState.Available) {
-      const { fileBaseUrl, manifestJson } = await this._fetchManifest(prefs.availableUpdate.url);
-      const diffedManifest = await this._diffManifests(manifestJson);
+      const { fileBaseUrl, manifestJson } = await this._fetchManifest(prefs.availableUpdate.url, prefs.availableUpdate.versionId);
+      const diffedManifest = await this._diffManifests(manifestJson, prefs.currentVersionId);
       await this.prepareUpdateDirectory(prefs.availableUpdate.versionId);
       await this._downloadFilesFromManifest(fileBaseUrl, diffedManifest,  prefs.availableUpdate.versionId, progress);
       prefs.availableUpdate.state = UpdateState.Pending;
@@ -280,12 +280,12 @@ class IonicDeployImpl {
     beforeDownloadTimer.end(`Downloaded ${manifest.length} files`);
   }
 
-  private async _fetchManifest(url: string): Promise<FetchManifestResp> {
+  private async _fetchManifest(url: string, versionId: string): Promise<FetchManifestResp> {
     const resp = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
     });
-    const newManifestPath = new URL(Path.join(this.appInfo.dataDirectory, this.NEW_MANIFEST_FILE)).pathname;
+    const newManifestPath = new URL(Path.join(this.appInfo.dataDirectory, versionId, this.MANIFEST_FILE)).pathname;
     console.log('Downloading new manifest to path: ', newManifestPath);
     await this._fileManager.downloadAndWriteFile(url, newManifestPath);
     console.log('Successfully Downloaded new manifest to path: ', newManifestPath);
@@ -295,17 +295,19 @@ class IonicDeployImpl {
     };
   }
 
-  private async _diffManifests(newManifest: ManifestFileEntry[]) {
+  private async _diffManifests(newManifest: ManifestFileEntry[], previousVersionId: string | undefined) {
     try {
       let manifestResp = await fetch(`${WEBVIEW_SERVER_URL}/${this.MANIFEST_FILE}`);
       try {
-        const manifestPath = new URL(Path.join(this.appInfo.dataDirectory, this.MANIFEST_FILE)).pathname;
-        console.log('trying to get already saved manifest in path: ', manifestPath);
-        manifestResp = await fetch(manifestPath, {
-          method: 'GET',
-          redirect: 'follow',
-        });
-        console.log('Got already saved manifest: ', manifestResp.json());
+        if (previousVersionId) {
+          const manifestPath = new URL(Path.join(this.appInfo.dataDirectory, previousVersionId, this.MANIFEST_FILE)).pathname;
+          console.log('trying to get already saved manifest in path: ', manifestPath);
+          manifestResp = await fetch(manifestPath, {
+            method: 'GET',
+            redirect: 'follow',
+          });
+          console.log('Got already saved manifest: ', manifestResp.json());
+        }
       } catch (e) {
         // do nothing as we already have the manifest response
       }
@@ -338,11 +340,6 @@ class IonicDeployImpl {
     prefs.availableUpdate.state = UpdateState.Ready;
     prefs.updates[prefs.availableUpdate.versionId] = prefs.availableUpdate;
     await this._savePrefs(prefs);
-    const newManifestPath = new URL(Path.join(this.appInfo.dataDirectory, this.NEW_MANIFEST_FILE)).pathname;
-    const currentManifestPath = new URL(Path.join(this.appInfo.dataDirectory, this.MANIFEST_FILE)).pathname;
-    console.log('trying to save the new manifest file to the current for future use.');
-    await this._fileManager.downloadAndWriteFile(newManifestPath, currentManifestPath);
-    console.log('Saved new manifest to the current.');
     return true;
   }
 
@@ -444,6 +441,12 @@ class IonicDeployImpl {
     const snapshotDir = this.getSnapshotCacheDir(versionId);
     try {
       await this._fileManager.remove(snapshotDir);
+      try {
+        const manifestPath = Path.join(this.appInfo.dataDirectory, versionId, this.MANIFEST_FILE);
+        await this._fileManager.remove(manifestPath);
+      } catch (e) {
+        // do nothing as the file probably doesn't exist
+      }
       timer.end();
     } catch (e) {
       console.log('No directory found for snapshot no need to delete');
