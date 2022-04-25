@@ -64,12 +64,16 @@
 
 - (void) copyTo:(CDVInvokedUrlCommand *)command;
 
+- (void) copyFiles:(CDVInvokedUrlCommand *)command;
+
+- (void) getDirectoryFiles: (CDVInvokedUrlCommand*)command;
+
 - (void) remove:(CDVInvokedUrlCommand *)command;
 
 - (void) downloadFile:(CDVInvokedUrlCommand *)command;
 
 /**
- * Get cordova plugin native congiguration and state information (config.xml stuff)
+ * Get cordova plugin native configuration and state information (config.xml stuff)
  *
  */
 - (NSMutableDictionary*) getNativeConfig;
