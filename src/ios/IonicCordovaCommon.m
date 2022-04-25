@@ -36,6 +36,16 @@
     [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK] callbackId:command.callbackId];
 }
 
+- (void) getDirectoryFiles: (CDVInvokedUrlCommand*)command {
+    CDVPluginResult* pluginResult = nil;
+    NSDictionary *options = command.arguments[0];
+    NSString *path = options[@"path"];
+    NSLog(@"Got directory to get files from: %@", path);
+    NSString* message = [[NSFileManager defaultManager] directoryContentsAtPath:path];
+    pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:message];
+    [self.commandDelegate sendPluginResult: pluginResult callbackId:command.callbackId];
+}
+
 - (void) copyTo:(CDVInvokedUrlCommand*)command {
     NSDictionary *options = command.arguments[0];
     NSLog(@"Got copyTo: %@", options);
@@ -65,9 +75,9 @@
     [self.commandDelegate sendPluginResult:[CDVPluginResult resultWithStatus:CDVCommandStatus_OK] callbackId:command.callbackId];
 }
 
-- (void) copyDirectory:(CDVInvokedUrlCommand*)command {
+- (void) copyFiles:(CDVInvokedUrlCommand*)command {
     NSDictionary *options = command.arguments[0];
-    NSLog(@"Got copyDirectory: %@", options);
+    NSLog(@"Got copyFiles: %@", options);
     NSString *source = options[@"source"];
     NSString *dest = options[@"target"];
 
@@ -118,6 +128,7 @@
             [urlSession flushWithCompletionHandler:^{
                 [urlSession finishTasksAndInvalidate];
             }];
+            NSLog(@"Cleared the cache");
         }
     }] resume];
 }
