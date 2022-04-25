@@ -237,9 +237,10 @@ class IonicDeployImpl {
           console.log('Was not able to download the current manifest file.', e);
         }
       }
-      const diffedManifest = await this._diffManifests(manifestJson, currentManifestJson);
-      await this.prepareUpdateDirectory(prefs.availableUpdate.versionId, prefs.currentVersionId);
-      await this._downloadFilesFromManifest(fileBaseUrl, diffedManifest,  prefs.availableUpdate.versionId, progress);
+      const filePath = new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE, prefs.availableUpdate.versionId)).pathname;
+      const { diffManifest, sameManifest, files } = await this._diffManifests(manifestJson, currentManifestJson, filePath);
+      await this.prepareUpdateDirectory(prefs.availableUpdate.versionId, prefs.currentVersionId, sameManifest, files);
+      await this._downloadFilesFromManifest(fileBaseUrl, diffManifest,  prefs.availableUpdate.versionId, progress);
       prefs.availableUpdate.state = UpdateState.Pending;
       await this._savePrefs(prefs);
       return true;
@@ -259,8 +260,7 @@ class IonicDeployImpl {
       const base = new URL(baseUrl);
       const newUrl = new URL(file.href, baseUrl);
       newUrl.search = base.search;
-      const filePath = Path.join(this.getSnapshotCacheDir(versionId), file.href);
-      await this._fileManager.downloadAndWriteFile(newUrl.toString(), filePath);
+      await this._fileManager.downloadAndWriteFile(newUrl.toString(), Path.join(this.getSnapshotCacheDir(versionId), file.href));
       // Update progress
       downloaded += file.size;
       if (progress) {
@@ -281,6 +281,8 @@ class IonicDeployImpl {
         count++;
         await Promise.all(downloads);
         beforeDownloadTimer.diff(`downloaded batch ${count} of ${numberBatches} downloads. Done downloading ${count * maxBatch} of ${manifest.length} files`);
+        // add a delay in between downloads to let it clear the cache.
+        await this._sleep();
         downloads = [];
       }
       downloads.push(downloadFile(entry));
@@ -291,6 +293,14 @@ class IonicDeployImpl {
       beforeDownloadTimer.diff(`downloaded batch ${count} of ${numberBatches} downloads. Done downloading all ${manifest.length} files`);
     }
     beforeDownloadTimer.end(`Downloaded ${manifest.length} files`);
+  }
+
+  private _sleep() {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        resolve('Done');
+      }, 50)
+    })
   }
 
   private async _fetchManifest(url: string, versionId: string): Promise<FetchManifestResp> {
@@ -304,28 +314,70 @@ class IonicDeployImpl {
     };
   }
 
-  private async _diffManifests(newManifest: ManifestFileEntry[], oldManifest: ManifestFileEntry[] | undefined) {
+  private async _recursiveFilesInPath(filePath: string, suffix: string = '', folderName: string = '') {
+    let fullPath = filePath, filePrefix = '';
+    if (suffix) {
+      fullPath = fullPath + suffix;
+      filePrefix = suffix.substring(1);
+    }
+    if (folderName) {
+      fullPath = fullPath + '/' + folderName;
+      if (filePrefix) filePrefix += '/' + folderName;
+      else filePrefix += folderName;
+    }
+    const filesNames = await this._fileManager.getDirectoryFiles(fullPath);
+    const files: string[] = [];
+    if (filesNames && filesNames.length) {
+      filesNames.forEach(fileName => {
+        let newFileName = filePrefix + '/' + fileName;
+        if (!filePrefix) newFileName = fileName;
+        files.push(newFileName);
+      })
+    }
+    const folders = files.filter((fileName) => {
+      return !fileName.includes('.');
+    });
+    for (let i = 0; i < folders.length; i++) {
+      const filesInFolder = await this._recursiveFilesInPath(filePath, (filePrefix) ? '/' + filePrefix : filePrefix, folders[i].split('/')[folders[i].split('/').length - 1]);
+      if (filesInFolder && filesInFolder.length) {
+        filesInFolder.forEach(fileName => {
+          files.push(fileName);
+        });
+      }
+    }
+    return files;
+  }
+
+  private async _diffManifests(newManifest: ManifestFileEntry[], oldManifest: ManifestFileEntry[] | undefined, filePath: string) {
     try {
       const manifestResp = await fetch(`${WEBVIEW_SERVER_URL}/${this.MANIFEST_FILE}`);
       let bundledManifest: ManifestFileEntry[] = await manifestResp.json();
       if (oldManifest) bundledManifest = oldManifest;
       const bundleManifestStrings = bundledManifest.map(entry => JSON.stringify(entry));
-      return newManifest.filter(entry => bundleManifestStrings.indexOf(JSON.stringify(entry)) === -1);
+      let diffManifest = newManifest.filter(entry => bundleManifestStrings.indexOf(JSON.stringify(entry)) === -1);
+      const files = await this._recursiveFilesInPath(filePath);
+      console.log('existing files: ', files.length);
+      console.log('starting diffManifest length: ', diffManifest.length);
+      const sameManifest = newManifest.filter(entry => bundleManifestStrings.indexOf(JSON.stringify(entry)) > -1);
+      const diffManifestCopy = [...diffManifest];
+      diffManifest = diffManifestCopy.filter(currentRow => {
+        return files.indexOf(currentRow.href) == -1;
+      });
+      console.log('ending diffManifest length: ', diffManifest.length);
+      // loop through files already there in the files left and filter it down more. (for both same and diff)
+      return {diffManifest, sameManifest, files};
     } catch (e) {
-      return newManifest;
+      return {diffManifest: newManifest, sameManifest: newManifest.filter(() => false) , files: []};
     }
   }
 
-  private async prepareUpdateDirectory(versionId: string, currentVersionId: string | undefined) {
-    await this._cleanSnapshotDir(versionId);
-    console.log('Cleaned version directory');
-
+  private async prepareUpdateDirectory(versionId: string, currentVersionId: string | undefined, manifest: ManifestFileEntry[], files: string[]) {
     if (currentVersionId) {
-      await this._copyCurrentAppDir(currentVersionId, versionId);
+      await this._copyCurrentAppDir(currentVersionId, versionId, manifest);
       console.log('Copied current app resources');
     }
     else {
-      await this._copyBaseAppDir(versionId);
+      await this._copyBaseAppDir(versionId, manifest, files);
       console.log('Copied base app resources');
     }
   }
@@ -451,24 +503,32 @@ class IonicDeployImpl {
     }
   }
 
-  private async _copyBaseAppDir(versionId: string) {
+  private async _copyBaseAppDir(versionId: string, manifest: ManifestFileEntry[], files: string[]) {
     const timer = new Timer('CopyBaseApp');
-    await this._fileManager.copyTo({
-      source: {
-        path: this.getBundledAppDir(),
-        directory: 'APPLICATION',
-      },
-      target: this.getSnapshotCacheDir(versionId),
-    });
+    if (!files || !files.length) {
+      await this._fileManager.copyTo({
+        source: {
+          path: this.getBundledAppDir(),
+          directory: 'APPLICATION',
+        },
+        target: this.getSnapshotCacheDir(versionId),
+      });
+    }
     timer.end();
   }
 
-  private async _copyCurrentAppDir(currentVersionId: string, versionId: string) {
+  private async _copyCurrentAppDir(currentVersionId: string, versionId: string, manifest: ManifestFileEntry[]) {
     const timer = new Timer('CopyCurrentApp');
-    await this._fileManager.copyDirectory({
-      source: new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE,  currentVersionId)).pathname,
-      target: this.getSnapshotCacheDir(versionId),
-    });
+    for (let i = 0; i < manifest.length; i++) {
+      await this._fileManager.copyFiles({
+        source: new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE,  currentVersionId)).pathname + '/' + manifest[i].href,
+        target: this.getSnapshotCacheDir(versionId)
+      });
+    }
+    await this._fileManager.copyFiles({
+      source: new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE,  currentVersionId)).pathname + '/plugins',
+      target: this.getSnapshotCacheDir(versionId) + '/plugins'
+    })
     timer.end();
   }
 
@@ -605,9 +665,18 @@ class FileManager {
     });
   }
 
-  async copyDirectory(options: {source: string, target: string}) {
+  async copyFiles(options: {source: string, target: string}) {
     return new Promise<void>((resolve, reject) => {
-      cordova.exec(resolve, reject, 'IonicCordovaCommon', 'copyDirectory', [options]);
+      cordova.exec(resolve, reject, 'IonicCordovaCommon', 'copyFiles', [options]);
+    })
+  }
+
+  async getDirectoryFiles(path: string) {
+    return new Promise<string[]>((resolve, reject) => {
+      const options = {
+        path: path
+      }
+      cordova.exec(resolve, reject, 'IonicCordovaCommon', 'getDirectoryFiles', [options]);
     })
   }
 }
