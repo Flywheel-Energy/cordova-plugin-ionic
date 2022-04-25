@@ -228,11 +228,33 @@ public class IonicCordovaCommon extends CordovaPlugin {
   }
 
   /**
-   * copy a directory to another directory
+   * Lists the files in a path
    *
    */
-  public void copyDirectory(CallbackContext callbackContext, JSONObject options) throws JSONException {
-    Log.d(TAG, "copyDirectory called with " + options.toString());
+  public void getDirectoryFiles(CallbackContext callbackContext, JSONObject options) throws JSONException {
+    Log.d(TAG, "copyFiles called with " + options.toString());
+    PluginResult result;
+    try {
+      String path = options.getString("path");
+      String[] fileList = new File(path).listFiles();
+      result = new PluginResult(PluginResult.Status.OK, fileList);
+      result.setKeepCallback(false);
+      callbackContext.sendPluginResult(result);
+      return;
+    } catch (Exception e) {
+      result = new PluginResult(PluginResult.Status.ERROR, e.getMessage());
+      result.setKeepCallback(false);
+      callbackContext.sendPluginResult(result);
+      return;
+    }
+  }
+
+  /**
+   * copy a files to another directory
+   *
+   */
+  public void copyFiles(CallbackContext callbackContext, JSONObject options) throws JSONException {
+    Log.d(TAG, "copyFiles called with " + options.toString());
     PluginResult result;
 
     try {
