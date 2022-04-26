@@ -238,8 +238,8 @@ class IonicDeployImpl {
         }
       }
       const filePath = new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE, prefs.availableUpdate.versionId)).pathname;
-      const { diffManifest, sameManifest, files } = await this._diffManifests(manifestJson, currentManifestJson, filePath);
-      await this.prepareUpdateDirectory(prefs.availableUpdate.versionId, prefs.currentVersionId, sameManifest, files);
+      const { diffManifest, sameManifest } = await this._diffManifests(manifestJson, currentManifestJson, filePath);
+      await this.prepareUpdateDirectory(prefs.availableUpdate.versionId, prefs.currentVersionId, sameManifest);
       await this._downloadFilesFromManifest(fileBaseUrl, diffManifest,  prefs.availableUpdate.versionId, progress);
       prefs.availableUpdate.state = UpdateState.Pending;
       await this._savePrefs(prefs);
@@ -354,6 +354,7 @@ class IonicDeployImpl {
       let bundledManifest: ManifestFileEntry[] = await manifestResp.json();
       if (oldManifest) bundledManifest = oldManifest;
       const bundleManifestStrings = bundledManifest.map(entry => JSON.stringify(entry));
+      console.log('new manifest length: ', newManifest.length);
       let diffManifest = newManifest.filter(entry => bundleManifestStrings.indexOf(JSON.stringify(entry)) === -1);
       const files = await this._recursiveFilesInPath(filePath);
       console.log('existing files: ', files.length);
@@ -365,21 +366,26 @@ class IonicDeployImpl {
       });
       console.log('ending diffManifest length: ', diffManifest.length);
       // loop through files already there in the files left and filter it down more. (for both same and diff)
-      return {diffManifest, sameManifest, files};
+      return {diffManifest, sameManifest};
     } catch (e) {
-      return {diffManifest: newManifest, sameManifest: newManifest.filter(() => false) , files: []};
+      return {diffManifest: newManifest, sameManifest: newManifest.filter(() => false)};
     }
   }
 
-  private async prepareUpdateDirectory(versionId: string, currentVersionId: string | undefined, manifest: ManifestFileEntry[], files: string[]) {
-    if (currentVersionId) {
-      await this._copyCurrentAppDir(currentVersionId, versionId, manifest);
-      console.log('Copied current app resources');
-    }
-    else {
-      await this._copyBaseAppDir(versionId, manifest, files);
-      console.log('Copied base app resources');
-    }
+  private async prepareUpdateDirectory(versionId: string, currentVersionId: string | undefined, manifest: ManifestFileEntry[]) {
+
+    await this._copyBaseAppDir();
+    console.log('Copied base app resources');
+
+    let passedInFolder = 'base';
+    if (currentVersionId) passedInFolder = currentVersionId;
+    await this._copyCurrentAppDir(passedInFolder, versionId, manifest);
+    console.log('Copied current app resources');
+
+    await this._fileManager.copyFiles({
+      source: new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE,  'base')).pathname + '/plugins',
+      target: this.getSnapshotCacheDir(versionId) + '/plugins'
+    })
   }
 
   async extractUpdate(progress?: CallbackFunction<number>): Promise<boolean> {
@@ -503,32 +509,26 @@ class IonicDeployImpl {
     }
   }
 
-  private async _copyBaseAppDir(versionId: string, manifest: ManifestFileEntry[], files: string[]) {
+  private async _copyBaseAppDir() {
     const timer = new Timer('CopyBaseApp');
-    if (!files || !files.length) {
-      await this._fileManager.copyTo({
-        source: {
-          path: this.getBundledAppDir(),
-          directory: 'APPLICATION',
-        },
-        target: this.getSnapshotCacheDir(versionId),
-      });
-    }
+    await this._fileManager.copyTo({
+      source: {
+        path: this.getBundledAppDir(),
+        directory: 'APPLICATION',
+      },
+      target: this.getSnapshotCacheDir('base'),
+    });
     timer.end();
   }
 
-  private async _copyCurrentAppDir(currentVersionId: string, versionId: string, manifest: ManifestFileEntry[]) {
+  private async _copyCurrentAppDir(folderToCopyFrom: string, versionId: string, manifest: ManifestFileEntry[]) {
     const timer = new Timer('CopyCurrentApp');
     for (let i = 0; i < manifest.length; i++) {
       await this._fileManager.copyFiles({
-        source: new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE,  currentVersionId)).pathname + '/' + manifest[i].href,
+        source: new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE,  folderToCopyFrom)).pathname + '/' + manifest[i].href,
         target: this.getSnapshotCacheDir(versionId)
       });
     }
-    await this._fileManager.copyFiles({
-      source: new URL(Path.join(this.appInfo.dataDirectory, this.SNAPSHOT_CACHE,  currentVersionId)).pathname + '/plugins',
-      target: this.getSnapshotCacheDir(versionId) + '/plugins'
-    })
     timer.end();
   }
 
